@@ -34,15 +34,15 @@ export default Router;
 The router map for a mobile app that uses a "navigation stack" UI could indicate that certain routes should slide up a new layer:
 
 ```js
+import RouterDSL from '@ember/routing/dsl';
+
 let Router = EmberRouter.extend({
-  buildDSL() {
-    let dsl = this._super();
-    dsl.layer = function(routeName, opts = {}, callback=null) {
+  dslFactory: RouterDSL.extend({
+    layer(routeName, opts = {}, callback=null) {
       let optionsWithLayer = Object.assign({ newLayer: true }, opts);
       return this.route(routeName, optionsWithLayer, callback);
     };
-    return dsl;
-  }
+  });
 });
 
 Router.map(function(){
@@ -89,23 +89,23 @@ router.map(function(match) {
 
 The handler lookup method (which Ember provides to the microlib) would be called with the route name (as it is today) but now also include the options as a second argument.
 
-The EmberRouter's [`_getHandlerFunction`](https://github.com/lukemelia/ember.js/blob/ce3ccad1c3e294f022e68eb24a2985cd672a4c41/packages/ember-routing/lib/system/router.js#L554-L600) method would then be updated to return a function which accepts a second parameter, `options`. If `options` is passed, the handler lookup function would call `handler.applyRouteOptions(options)` after instantiating the handler.
+The EmberRouter's [`_getHandlerFunction`](https://github.com/emberjs/ember.js/blob/ce3ccad1c3e294f022e68eb24a2985cd672a4c41/packages/ember-routing/lib/system/router.js#L554-L600) method would then be updated to return a function which accepts a second parameter, `options`. If `options` is passed, the handler lookup function would call `handler.applyRouteOptions(options)` after instantiating the handler.
 
 Ember.Route would be updated to have a default no-op implementation of `applyRouteOptions`, which addon authors or app developers could override.
 
-Currently, EmberRouter's [`_buildDSL`](https://github.com/emberjs/ember.js/blob/0e4c342271200d3ff6908124947433d7ecd7bb46/packages/ember-routing/lib/system/router.js#L116-L133) is private, as indicated by the leading underscore. Making this method public as `buildDSL` and documenting it would empower developers pursuing advanced use cases to override it to either customize the DSL instance, or provide their own instance.
+Currently, EmberRouter's [`_buildDSL`](https://github.com/emberjs/ember.js/blob/0e4c342271200d3ff6908124947433d7ecd7bb46/packages/ember-routing/lib/system/router.js#L116-L133) statically references `EmberRouterDSL`. Instead, it should reference a new property `dslFactory`, to get the class to be used for the DSL. In the case that complex logic is needed to determine this class (this is not expected to be common), a getter could be supplied. Adding this public property and documenting it would empower developers pursuing advanced use cases to subclass Ember's DSL class, or to provide their own implementation.
 
-This implies that the contract of the DSL instance would also need to be stable and documented. That API is as follows:
+This implies that the contract of the DSL class would also need to be stable and documented. Let's look at the public methods on DSL:
 
 `route(name: string, options: any, callback: ()=>any): void;`
 
-This is the main method used in function passed to the `Router.map`. Currently, the supported `options` are `path` and `resetNamespace`, with any other options being ignored. Other options would now be passed to the `applyRouteOptions` method of the route (see below).
+This is the main method used in function passed to the `Router.map`. It is currently documented as part of `Router.map`'s docs [here](https://github.com/emberjs/ember.js/blob/0e4c342271200d3ff6908124947433d7ecd7bb46/packages/ember-routing/lib/system/router.js#L1335-L1375). Currently, the supported `options` are `path` and `resetNamespace`, with any other options being ignored. `path` and `resetNamespace` would continue to have the effect they have today, and in addition, they would be passed along with other options to the `applyRouteOptions` method of the route (see below).
 
 The DSL implementation should assert that passed options are serializable in order to be forward-compatible with possible future performance optimizations to the route generation and recognition implementation.
 
 `generate(): (match: any) => void;`
 
-This is called by the router to and is expected to return a function compatible with the router microlib's `map` method. See the [tildeio/router.js README](https://github.com/tildeio/router.js/) for details.
+This is called by the router and is expected to return a function compatible with the router microlib's `map` method. See the [tildeio/router.js README](https://github.com/tildeio/router.js/) for details.
 
 `mount(_name: string, options: any): void;`
 
@@ -113,11 +113,20 @@ This method is used to include a routable engine in an application. Supported `o
 
 There is one additional method on the DSL implementation whose appearance suggests it might be part of the public API: `push`. In fact, it is only invoked by the DSL itself and should be made private by being renamed to `_push`.
 
+Internally, the DSL implementation constructs another instance of the DSL class (i.e. `new DSL()`) when processing callbacks provided to `this.route`). This would be problematic if a developer subclasses the DSL class, so the internals should be changed so that each place we call `new DSL` [here](https://github.com/emberjs/ember.js/blob/master/packages/ember-routing/lib/system/dsl.js), we instead do:
+
+```js
+let DSL = this.constructor;
+new DSL()
+```
+
 ## How we teach this
 
 It is not expected that beginner-level Ember developers would need to use these hooks. There is nothing made possible by this feature that can't be accomplished without it, albeit more verbosely and spread out across route definitions.
 
-As a result, this feature would merit only passing mention in the guides and rely on API docs as the primary teaching mechanism.
+As a result, this feature would merit only passing mention in the guides and rely on API docs as the primary teaching mechanism to addon authors or advanced developers.
+
+Addons which leverage these hooks will bear the "teaching burden" of how a developer needs to modify their `router.js` and routes file to work with the addon.
 
 ## Drawbacks
 
@@ -126,6 +135,8 @@ Allowing additional options passed to `this.route` to have meaning implies that 
 Allowing alternate DSL implementations makes future changes to the DSL API carry more risk.
 
 In general, more public API surface area means more complexity, so the win of providing flexibility to advanced users via a lower-level API might be outweighed by the API surface area increase.
+
+Historically, `Ember.Route` instances were supposed to be "stateless". This makes them somewhat more stateful. Is that a problem?
 
 ## Alternatives
 
@@ -149,6 +160,6 @@ An attempts at an alternative DSL implementation was made here:
 
 In angular-land, the router config allows providing a `data` object: `The data property ... is a place to store arbitrary data associated with this specific route. The data property is accessible within each activated route. Use it to store items such as page titles, breadcrumb text, and other read-only, static data.`
 
-The router in vue.js supports a similar object, named `props`. [docs](https://router.vuejs.org/en/essentials/passing-props.html).
+The router in vue.js supports a similar object, named `props`.  [docs](https://router.vuejs.org/en/essentials/passing-props.html).
 
 In react-router, since Components are routed directly, it would be trivial to extend the component inline. (The RFC author is not an expert in this area. Please comment if you are.)
