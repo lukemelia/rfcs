@@ -6,9 +6,11 @@
 
 ## Summary
 
-Adding a public hook to the Ember Router and one to Ember.Route would allow for addon authors and advanced app developers to enrich the route definition process in expressive ways that are not currently possible with existing hooks.
+Allow the router DSL to be extended to increase the router map's expressiveness and utility. Aimed at addon authors and advanced app developers.
 
 ## Motivation
+
+The router.js file contains the high-level definition of the app's routes, and is often the first place a developer looks to begin becoming familiar with a new app or to orient herself when beginning a new feature. The better the route map is at expressing the high-level contours of the app, the better it serves app developers.
 
 This RFC proposes 2 changes to support addon authors and app developers in enhancing the expressiveness of the route map. First, a hook would be added to allow the DSL implementation to be specified or extended. Second, any route options specified in the map function would be provided to the route. These changes would work hand-in-hand, with the DSL specifying options that would be available to the route.
 
@@ -24,8 +26,22 @@ Router.map(function(){
   this.route('login');
   this.authenticated(function(){
     this.route('billing');
-    this.route('preferences');
+    this.route('preferences', { path: '/prefs' });
   });
+});
+
+export default Router;
+```
+Alternately, an auth library could express this as route option:
+
+```js
+import Router from 'my-auth-addon/router';
+
+Router.map(function(){
+  this.route('about');
+  this.route('login');
+  this.route('billing', { authenticated: true });
+  this.route('preferences', { path: '/prefs', authenticated: true });
 });
 
 export default Router;
@@ -60,7 +76,7 @@ In both examples, a route base class or mixin could be used to interpret options
 
 ### Background
 
-The router.js file contains the high-level definition of the app's routes, and is often the first place a developer looks to begin becoming familiar with a new app or to orient herself when beginning a new feature. It currently allows the expression of the following aspects of the app's routes in the function passed to `Router#map`:
+The Ember Router DSL currently allows the expression of the following aspects of the app's routes in the function passed to `Router#map`:
 
   1) The route name. This is expressed via a combination of the first argument to `this.route`, the nesting of the DSL usage, and the possible presence of the option `resetNamespace: true` as part of the second argument to `this.route`.
   2) The path, including one or more dynamic segments. This is expressed via the `path` option in the second argument to `this.route`. e.g. `path: '/a/path/with/:some_id'`
@@ -136,11 +152,17 @@ Allowing alternate DSL implementations makes future changes to the DSL API carry
 
 In general, more public API surface area means more complexity, so the win of providing flexibility to advanced users via a lower-level API might be outweighed by the API surface area increase.
 
-Historically, `Ember.Route` instances were supposed to be "stateless". This makes them somewhat more stateful. Is that a problem?
+Historically, `Ember.Route` instances were supposed to be "stateless". This makes them somewhat more stateful. Is that a problem, or are we comfortable accepting that stateless routes is no longer a design goal?
 
 ## Alternatives
 
-This risk of option name collisions could be eliminated by requiring that userland options be nested under hash named `routeOptions` or similar. However, this would negatively affects the readability of the the code and limits the expressiveness of the DSL, which is significant part of the goal of this RFC.
+This risk of option name collisions could be eliminated by requiring that userland options be nested under hash named `routeOptions` or similar. For example:
+
+```js
+this.route('preferences', { path: '/prefs', routeOptions: { authenticated: true } });
+```
+
+However, this would negatively affects the readability and  expressiveness of the DSL, which is significant part of the goal of this RFC.
 
 Instead of calling `Route#applyRouteOptions`, the router could simply call `Route#setProperties` with the DSL-provided options. This would make the availability of those options to the route to be less "opt-in" but more discoverable via debugging tools. The `applyRouteOptions` path is recommended by this RFC because it reduces the risk of route options overwriting route properties.
 
